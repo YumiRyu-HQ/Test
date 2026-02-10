@@ -1,0 +1,1360 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Design Guide PDF Search</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="app">
+    <div class="global-bar">
+      <div class="brand">
+        <img src="./assets/mirae-asset-securities-logo.png" alt="Mirae Asset Securities" />
+      </div>
+      <button id="openUploadBtn" type="button">Open Document Upload</button>
+    </div>
+
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Design Guide Retrieval</p>
+        <h1>Design Guide Document Search</h1>
+        <p>Document search workspace for design guides. Search runs against PDF content.</p>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <section class="left-pane">
+        <article class="panel search-panel">
+          <h2 class="section-title">Search</h2>
+          <div id="categoryFilters" class="category-filters">
+            <button class="category-btn is-active" data-category="Basic" type="button">Basic</button>
+            <button class="category-btn" data-category="Web" type="button">Web</button>
+            <button class="category-btn" data-category="Mobile" type="button">Mobile</button>
+          </div>
+          <div class="search-row">
+            <input id="queryInput" type="search" placeholder="e.g. default button, accessibility contrast, token naming" />
+            <button id="searchBtn" type="button">Search</button>
+            <button id="clearBtn" class="secondary" type="button">Clear</button>
+          </div>
+          <p id="resultHint" class="hint">Upload documents first, then search.</p>
+          <div id="results" class="list"></div>
+        </article>
+
+        <article class="panel docs-panel">
+          <details id="docAccordion" class="doc-accordion">
+            <summary>
+              <span>Search Target Documents</span>
+              <small><strong id="docCount">0</strong> docs / <strong id="pageCount">0</strong>p</small>
+            </summary>
+            <div id="docList" class="doc-list"></div>
+          </details>
+        </article>
+      </section>
+
+      <section class="panel viewer-panel">
+        <div class="viewer-head">
+          <h2 class="section-title">Matched Page</h2>
+          <p id="viewerMeta" class="viewer-meta">Click a result to view the page.</p>
+        </div>
+
+        <div class="viewer-controls">
+          <button id="prevPageBtn" class="secondary" type="button">Prev Page</button>
+          <span id="pageIndicator" class="page-indicator">- / -</span>
+          <button id="nextPageBtn" class="secondary" type="button">Next Page</button>
+        </div>
+
+        <div class="canvas-wrap">
+          <canvas id="pdfCanvas"></canvas>
+        </div>
+        <div id="pageText" class="page-text">Selected page text will appear here.</div>
+      </section>
+    </section>
+  </main>
+
+  <section id="accessModal" class="modal hidden" aria-hidden="true">
+    <div class="modal-panel access-panel">
+      <div class="modal-head">
+        <h2>Upload Access</h2>
+        <button id="closeAccessBtn" class="secondary" type="button">Close</button>
+      </div>
+      <label class="category-field" for="accessPasswordInput">
+        Enter password
+        <input id="accessPasswordInput" type="password" autocomplete="off" />
+      </label>
+      <button id="confirmAccessBtn" type="button">Continue</button>
+      <p id="accessStatus" class="status"></p>
+      <p class="hint access-note">File upload is available only to the Global Digital WM team. Please contact us if needed.</p>
+    </div>
+  </section>
+
+  <section id="uploadModal" class="modal hidden" aria-hidden="true">
+    <div class="modal-panel">
+      <div class="modal-head">
+        <h2>Document Upload</h2>
+        <button id="closeUploadBtn" class="secondary" type="button">Close</button>
+      </div>
+      <p class="hint">Uploaded PDFs are added to search targets. Duplicate filenames are skipped.</p>
+      <label id="uploadBox" class="upload-box" for="fileInput">
+        <strong>Select PDF Files</strong>
+        <span>Multiple files can be uploaded at once</span>
+      </label>
+      <input id="fileInput" class="file-input hidden-file-input" type="file" accept="application/pdf" multiple />
+      <div class="selected-wrap">
+        <p class="selected-title">Selected Files</p>
+        <div id="selectedFileList" class="selected-list"></div>
+      </div>
+      <div class="category-stage-row">
+        <label class="category-field compact" for="uploadCategory">
+          Category
+          <select id="uploadCategory">
+            <option value="" selected>Select</option>
+            <option value="Basic">Basic</option>
+            <option value="Web">Web</option>
+            <option value="Mobile">Mobile</option>
+          </select>
+        </label>
+        <button id="stageUploadBtn" class="secondary" type="button">Add</button>
+      </div>
+      <div class="pending-wrap">
+        <p class="pending-title">Upload Queue</p>
+        <div id="pendingList"></div>
+      </div>
+      <button id="commitUploadBtn" class="upload-commit-btn" type="button">Upload</button>
+      <p id="status" class="status"></p>
+      <div id="uploadProgressWrap" class="upload-progress-wrap hidden" aria-hidden="true">
+        <div class="upload-progress-track">
+          <div id="uploadProgressBar" class="upload-progress-bar"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script type="module">
+    import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs";
+
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs";
+
+    const fileInput = document.getElementById("fileInput");
+    const queryInput = document.getElementById("queryInput");
+    const searchBtn = document.getElementById("searchBtn");
+    const clearBtn = document.getElementById("clearBtn");
+    const statusEl = document.getElementById("status");
+    const resultHint = document.getElementById("resultHint");
+    const resultsEl = document.getElementById("results");
+    const viewerMeta = document.getElementById("viewerMeta");
+    const canvas = document.getElementById("pdfCanvas");
+    const pageText = document.getElementById("pageText");
+    const docListEl = document.getElementById("docList");
+    const docCountEl = document.getElementById("docCount");
+    const pageCountEl = document.getElementById("pageCount");
+    const prevPageBtn = document.getElementById("prevPageBtn");
+    const nextPageBtn = document.getElementById("nextPageBtn");
+    const pageIndicator = document.getElementById("pageIndicator");
+    const accessModal = document.getElementById("accessModal");
+    const closeAccessBtn = document.getElementById("closeAccessBtn");
+    const confirmAccessBtn = document.getElementById("confirmAccessBtn");
+    const accessPasswordInput = document.getElementById("accessPasswordInput");
+    const accessStatus = document.getElementById("accessStatus");
+    const openUploadBtn = document.getElementById("openUploadBtn");
+    const closeUploadBtn = document.getElementById("closeUploadBtn");
+    const uploadModal = document.getElementById("uploadModal");
+    const uploadBox = document.getElementById("uploadBox");
+    const uploadCategory = document.getElementById("uploadCategory");
+    const categoryButtons = Array.from(document.querySelectorAll(".category-btn"));
+    const stageUploadBtn = document.getElementById("stageUploadBtn");
+    const commitUploadBtn = document.getElementById("commitUploadBtn");
+    const pendingList = document.getElementById("pendingList");
+    const selectedFileList = document.getElementById("selectedFileList");
+    const uploadProgressWrap = document.getElementById("uploadProgressWrap");
+    const uploadProgressBar = document.getElementById("uploadProgressBar");
+    const DEFAULT_DOCS = [];
+
+    let searchDebounceTimer = null;
+    let activeRenderTask = null;
+    let ocrWorkerPromise = null;
+    let ocrEnabled = Boolean(globalThis.Tesseract && typeof globalThis.Tesseract.createWorker === "function");
+    let uploadAccessGranted = false;
+    /** @type {File[]} */
+    let selectedFiles = [];
+    /** @type {Record<"Basic"|"Web"|"Mobile", File[]>} */
+    const pendingUploads = { Basic: [], Web: [], Mobile: [] };
+    /** @type {Record<"Basic"|"Web"|"Mobile", boolean>} */
+    const pendingOpenState = { Basic: false, Web: false, Mobile: false };
+
+    /** @type {{ id: string, name: string, category: "Basic"|"Web"|"Mobile", pdf: any | null, pages: string[], normalizedPages?: string[], compactPages?: string[], openaiFileId?: string }[]} */
+    const docs = [];
+
+    const viewerState = {
+      doc: null,
+      page: 1,
+      query: "",
+      searchTerms: [],
+      activeCategory: "Basic",
+    };
+
+    const translationPairs = [];
+
+    fileInput.addEventListener("change", (event) => {
+      selectedFiles = Array.from(event.target.files || []);
+      renderSelectedFiles();
+      statusEl.classList.remove("error");
+      statusEl.textContent = selectedFiles.length
+        ? `${selectedFiles.length} file(s) selected. Choose a category and click Add.`
+        : "Select files to upload.";
+    });
+    uploadBox.addEventListener("click", () => {
+      uploadCategory.value = "";
+    });
+
+    stageUploadBtn.addEventListener("click", () => {
+      if (!selectedFiles.length) {
+        statusEl.classList.add("error");
+        statusEl.textContent = "Select files first.";
+        return;
+      }
+
+      if (!uploadCategory.value) {
+        statusEl.classList.add("error");
+        statusEl.textContent = "Select a category.";
+        return;
+      }
+
+      const targetCategory = /** @type {"Basic"|"Web"|"Mobile"} */ (uploadCategory.value);
+      const queue = pendingUploads[targetCategory];
+      let addedCount = 0;
+
+      selectedFiles.forEach((file) => {
+        const alreadyQueued = queue.some((queued) => queued.name === file.name && queued.size === file.size);
+        const alreadyUploaded = docs.some((doc) => doc.category === targetCategory && doc.name === file.name);
+        if (!alreadyQueued && !alreadyUploaded) {
+          queue.push(file);
+          addedCount += 1;
+        }
+      });
+
+      selectedFiles = [];
+      fileInput.value = "";
+      renderSelectedFiles();
+      statusEl.classList.remove("error");
+      statusEl.textContent = `[${targetCategory}] ${addedCount} file(s) added to upload queue.`;
+      setUploadProgressVisible(false);
+      renderPendingUploads();
+    });
+
+    commitUploadBtn.addEventListener("click", async () => {
+      const totalPending = Object.values(pendingUploads).reduce((sum, files) => sum + files.length, 0);
+      if (!totalPending) {
+        statusEl.classList.add("error");
+        statusEl.textContent = "Upload queue is empty. Add files first.";
+        return;
+      }
+
+      let completedCount = 0;
+      setUploadProgressVisible(true);
+      setUploadProgress(0);
+      setUploadRunningStatus(completedCount, totalPending);
+      commitUploadBtn.disabled = true;
+      let successCount = 0;
+      let skippedCount = 0;
+      const failedFiles = [];
+      const failedDetails = [];
+      const previewFailedFiles = [];
+      const nextPending = { Basic: [], Web: [], Mobile: [] };
+
+      const categories = /** @type {Array<"Basic"|"Web"|"Mobile">} */ (["Basic", "Web", "Mobile"]);
+      for (const category of categories) {
+        const queue = pendingUploads[category];
+        for (const file of queue) {
+          if (docs.some((doc) => doc.name === file.name && doc.category === category)) {
+            skippedCount += 1;
+            completedCount += 1;
+            setUploadProgress(100);
+            setUploadRunningStatus(completedCount, totalPending);
+            continue;
+          }
+
+          setUploadProgress(0);
+          setUploadRunningStatus(completedCount, totalPending);
+          try {
+            const uploadResult = await uploadFileToOpenAI(file, category, (ratio) => {
+              setUploadProgress(Math.max(0, Math.min(70, ratio * 70)));
+              setUploadRunningStatus(completedCount, totalPending);
+            });
+            let pdf = null;
+            let pages = [];
+
+            try {
+              const buffer = await file.arrayBuffer();
+              pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+
+              for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
+                const page = await pdf.getPage(pageNum);
+                const content = await page.getTextContent();
+                let text = content.items.map((item) => item.str).join(" ").replace(/\s+/g, " ").trim();
+                if (shouldUseOCR(text)) {
+                  const ocrText = await extractPageTextWithOCR(page);
+                  text = mergePageTexts(text, ocrText);
+                }
+                pages.push(text);
+                setUploadProgress(70 + (30 * pageNum) / Math.max(1, pdf.numPages));
+                setUploadRunningStatus(completedCount, totalPending);
+              }
+            } catch (previewErr) {
+              console.error(previewErr);
+              previewFailedFiles.push(file.name);
+            }
+
+            docs.push({
+              id: `${file.name}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+              name: file.name,
+              category,
+              pdf,
+              pages,
+              normalizedPages: pages.map((pageText) => normalizeForSearch(pageText)),
+              compactPages: pages.map((pageText) => normalizeCompact(pageText)),
+              openaiFileId: uploadResult.file_id,
+            });
+            successCount += 1;
+          } catch (err) {
+            console.error(err);
+            failedFiles.push(file.name);
+            failedDetails.push(`${file.name}: ${err?.message || "upload failed"}`);
+            nextPending[category].push(file);
+          } finally {
+            completedCount += 1;
+            setUploadProgress(100);
+            setUploadRunningStatus(completedCount, totalPending);
+          }
+        }
+      }
+
+      pendingUploads.Basic = nextPending.Basic;
+      pendingUploads.Web = nextPending.Web;
+      pendingUploads.Mobile = nextPending.Mobile;
+      renderPendingUploads();
+
+      refreshDocSummary();
+      syncViewerWithActiveCategory();
+      resultHint.textContent = "Enter a keyword to search document content.";
+      if (failedFiles.length > 0) {
+        statusEl.classList.add("error");
+        statusEl.textContent = `Uploaded ${successCount}, failed ${failedFiles.length}. Failed files stay in queue. ${failedDetails.join(" | ")}`;
+      } else if (previewFailedFiles.length > 0) {
+        statusEl.classList.remove("error");
+        statusEl.textContent = skippedCount > 0
+          ? `Uploaded ${successCount}, skipped duplicates ${skippedCount}. Preview extraction failed for ${previewFailedFiles.length} file(s) (${previewFailedFiles.join(", ")})`
+          : `Uploaded ${successCount}. Preview extraction failed for ${previewFailedFiles.length} file(s) (${previewFailedFiles.join(", ")})`;
+        closeUploadModal();
+      } else if (successCount > 0) {
+        statusEl.classList.remove("error");
+        statusEl.textContent = skippedCount > 0
+          ? `Upload complete: ${successCount} uploaded, ${skippedCount} duplicate(s) skipped.`
+          : `Upload completed. (${successCount})`;
+        closeUploadModal();
+      } else {
+        statusEl.classList.add("error");
+        statusEl.textContent = skippedCount > 0
+          ? `All files were skipped as duplicates. (${skippedCount})`
+          : "No files were uploaded. Check queue and file format.";
+      }
+      setUploadProgressVisible(false);
+      commitUploadBtn.disabled = false;
+
+      if (queryInput.value.trim()) {
+        runSearch();
+      }
+    });
+
+    pendingList.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (!target.classList.contains("pending-remove")) return;
+
+      const category = target.dataset.category;
+      const index = Number(target.dataset.index);
+      if (!category || Number.isNaN(index)) return;
+
+      removePendingFile(/** @type {"Basic"|"Web"|"Mobile"} */ (category), index);
+    });
+
+    pendingList.addEventListener("toggle", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLDetailsElement)) return;
+      if (!target.classList.contains("pending-group")) return;
+      const category = target.dataset.category;
+      if (!category) return;
+      pendingOpenState[/** @type {"Basic"|"Web"|"Mobile"} */ (category)] = target.open;
+    });
+
+    searchBtn.addEventListener("click", runSearch);
+    queryInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") runSearch();
+    });
+    queryInput.addEventListener("input", () => {
+      clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = setTimeout(runSearch, 120);
+    });
+
+    clearBtn.addEventListener("click", () => {
+      queryInput.value = "";
+      viewerState.query = "";
+      viewerState.searchTerms = [];
+      resultsEl.innerHTML = "";
+      resultHint.textContent = getDocsByActiveCategory().length
+        ? "Enter a search query."
+        : `Upload documents in ${viewerState.activeCategory} category first.`;
+      renderViewer();
+    });
+
+    prevPageBtn.addEventListener("click", () => {
+      if (!viewerState.doc || viewerState.page <= 1) return;
+      viewerState.page -= 1;
+      renderViewer();
+    });
+
+    nextPageBtn.addEventListener("click", () => {
+      if (!viewerState.doc || viewerState.page >= viewerState.doc.pages.length) return;
+      viewerState.page += 1;
+      renderViewer();
+    });
+
+    openUploadBtn.addEventListener("click", () => {
+      if (uploadAccessGranted) {
+        openUploadModal();
+        return;
+      }
+      openAccessModal();
+    });
+
+    closeAccessBtn.addEventListener("click", closeAccessModal);
+    accessModal.addEventListener("click", (event) => {
+      if (event.target === accessModal) closeAccessModal();
+    });
+    accessPasswordInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") confirmUploadAccess();
+    });
+    confirmAccessBtn.addEventListener("click", confirmUploadAccess);
+
+    closeUploadBtn.addEventListener("click", closeUploadModal);
+    uploadModal.addEventListener("click", (event) => {
+      if (event.target === uploadModal) closeUploadModal();
+    });
+    categoryButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        const category = button.dataset.category;
+        if (!category || category === viewerState.activeCategory) return;
+        viewerState.activeCategory = category;
+        categoryButtons.forEach((btn) => btn.classList.toggle("is-active", btn === button));
+        refreshDocSummary();
+        syncViewerWithActiveCategory();
+        if (queryInput.value.trim()) {
+          runSearch();
+        } else {
+          resultsEl.innerHTML = "";
+          resultHint.textContent = `${viewerState.activeCategory} category selected. Enter a search query.`;
+        }
+      });
+    });
+
+    function closeUploadModal() {
+      setUploadProgressVisible(false);
+      uploadModal.classList.add("hidden");
+      uploadModal.setAttribute("aria-hidden", "true");
+    }
+
+    function openUploadModal() {
+      uploadCategory.value = "";
+      renderPendingUploads();
+      setUploadProgressVisible(false);
+      uploadModal.classList.remove("hidden");
+      uploadModal.setAttribute("aria-hidden", "false");
+    }
+
+    function openAccessModal() {
+      accessPasswordInput.value = "";
+      accessStatus.textContent = "";
+      accessStatus.classList.remove("error");
+      accessModal.classList.remove("hidden");
+      accessModal.setAttribute("aria-hidden", "false");
+      accessPasswordInput.focus();
+    }
+
+    function closeAccessModal() {
+      accessModal.classList.add("hidden");
+      accessModal.setAttribute("aria-hidden", "true");
+    }
+
+    function confirmUploadAccess() {
+      const password = accessPasswordInput.value;
+      if (password !== "gdwm") {
+        accessStatus.classList.add("error");
+        accessStatus.textContent = "Invalid password.";
+        return;
+      }
+      uploadAccessGranted = true;
+      closeAccessModal();
+      openUploadModal();
+    }
+
+    function renderPendingUploads() {
+      // Preserve current open state before rerender.
+      pendingList.querySelectorAll(".pending-group").forEach((details) => {
+        if (!(details instanceof HTMLDetailsElement)) return;
+        const category = details.dataset.category;
+        if (!category) return;
+        pendingOpenState[/** @type {"Basic"|"Web"|"Mobile"} */ (category)] = details.open;
+      });
+
+      pendingList.innerHTML = "";
+      const categories = /** @type {Array<"Basic"|"Web"|"Mobile">} */ (["Basic", "Web", "Mobile"]);
+
+      categories.forEach((category) => {
+        const files = pendingUploads[category];
+        if (!files.length) return;
+
+        const details = document.createElement("details");
+        details.className = "pending-group";
+        details.dataset.category = category;
+        details.open = pendingOpenState[category];
+        details.innerHTML = `<summary>[${category}] - ${files.length}</summary>`;
+
+        const ul = document.createElement("ul");
+        ul.className = "pending-files";
+        files.forEach((file, index) => {
+          const li = document.createElement("li");
+          li.innerHTML = `
+            <span class="pending-file-name">${escapeHtml(file.name)}</span>
+            <button
+              type="button"
+              class="pending-remove"
+              data-category="${category}"
+              data-index="${index}"
+            >
+              Remove
+            </button>
+          `;
+          ul.appendChild(li);
+        });
+
+        details.appendChild(ul);
+        pendingList.appendChild(details);
+      });
+
+      if (!pendingList.childElementCount) {
+        const empty = document.createElement("p");
+        empty.className = "hint";
+        empty.textContent = "No files in upload queue.";
+        pendingList.appendChild(empty);
+      }
+    }
+
+    function renderSelectedFiles() {
+      selectedFileList.innerHTML = "";
+      if (!selectedFiles.length) {
+        const empty = document.createElement("p");
+        empty.className = "hint";
+        empty.textContent = "No files selected.";
+        selectedFileList.appendChild(empty);
+        return;
+      }
+
+      const ul = document.createElement("ul");
+      ul.className = "selected-files";
+      selectedFiles.forEach((file) => {
+        const li = document.createElement("li");
+        li.textContent = file.name;
+        ul.appendChild(li);
+      });
+      selectedFileList.appendChild(ul);
+    }
+
+    function removePendingFile(category, index) {
+      const queue = pendingUploads[category];
+      if (!queue || index < 0 || index >= queue.length) return;
+      queue.splice(index, 1);
+      pendingOpenState[category] = true;
+      statusEl.classList.remove("error");
+      statusEl.textContent = `[${category}] Removed 1 file from queue.`;
+      renderPendingUploads();
+    }
+
+    function refreshDocSummary() {
+      const docsInCategory = getDocsByActiveCategory();
+      docCountEl.textContent = String(docsInCategory.length);
+      pageCountEl.textContent = String(docsInCategory.reduce((sum, doc) => sum + doc.pages.length, 0));
+      docListEl.innerHTML = "";
+
+      docsInCategory.forEach((doc) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "doc-item";
+        btn.innerHTML = `
+          <span class="doc-name">${escapeHtml(doc.name)}</span>
+          <span class="doc-meta">${doc.category} · ${doc.pages.length}p</span>
+        `;
+        btn.addEventListener("click", () => setViewerDoc(doc, 1));
+        docListEl.appendChild(btn);
+      });
+
+      if (!docsInCategory.length) {
+        const empty = document.createElement("p");
+        empty.className = "hint";
+        empty.textContent = `No uploaded documents in ${viewerState.activeCategory} category.`;
+        docListEl.appendChild(empty);
+      }
+    }
+
+    async function runSearch() {
+      const query = queryInput.value.trim();
+      viewerState.query = query;
+      viewerState.searchTerms = buildSearchTerms(query);
+      resultsEl.innerHTML = "";
+      const docsInCategory = getDocsByActiveCategory();
+
+      if (!docsInCategory.length) {
+        resultHint.textContent = `Upload documents in ${viewerState.activeCategory} category first.`;
+        return;
+      }
+
+      if (!query) {
+        resultHint.textContent = "Enter a search query.";
+        return;
+      }
+
+      resultHint.textContent = "Searching...";
+      const localMatches = searchAcrossDocs(viewerState.searchTerms, docsInCategory, query);
+      let openaiMatches = [];
+      let openaiFailed = false;
+      try {
+        openaiMatches = await searchViaOpenAI(query, viewerState.activeCategory);
+      } catch (err) {
+        console.error(err);
+        openaiFailed = true;
+      }
+
+      let matches = mergeSearchResults(openaiMatches, localMatches, 180);
+      if (isExactPhraseQuery(query)) {
+        matches = matches.filter((match) => matchContainsExactPhrase(match, query));
+      }
+      if (!matches.length) {
+        resultHint.textContent = `No results for "${query}" in ${viewerState.activeCategory} category.`;
+        return;
+      }
+
+      const grouped = groupMatchesByDoc(matches);
+      resultHint.textContent = openaiFailed
+        ? `${matches.length} results from ${grouped.length} document(s) in ${viewerState.activeCategory} category. (Local search only)`
+        : `${matches.length} results from ${grouped.length} document(s) in ${viewerState.activeCategory} category. (OpenAI ${openaiMatches.length} + Local ${localMatches.length})`;
+
+      grouped.forEach((group) => {
+        const section = document.createElement("section");
+        section.className = "result-group";
+
+        const head = document.createElement("div");
+        head.className = "result-group-head";
+        head.innerHTML = `
+          <div class="result-group-title">${escapeHtml(group.docName)}</div>
+          <div class="result-group-count">${group.matches.length} hits</div>
+        `;
+        section.appendChild(head);
+
+        group.matches.forEach((match) => {
+          const card = document.createElement("button");
+          card.className = "result";
+          card.type = "button";
+          card.innerHTML = `
+            <div class="meta">Page ${match.page} · Matched query: ${escapeHtml(viewerState.query || match.matchedTerm)}</div>
+            <div class="snippet">${highlightSnippet(match.snippet, viewerState.searchTerms)}</div>
+          `;
+          card.addEventListener("click", () => openMatch(match));
+          section.appendChild(card);
+        });
+
+        resultsEl.appendChild(section);
+      });
+
+      openMatch(matches[0]);
+    }
+
+    function searchAcrossDocs(searchTerms, sourceDocs, query) {
+      const terms = searchTerms
+        .map((term) => normalizeForSearch(term.trim()))
+        .filter(Boolean)
+        .sort((a, b) => b.length - a.length);
+
+      const list = [];
+      const maxResults = 220;
+      const normalizedQuery = normalizeForSearch(query || "");
+      const compactQuery = normalizeCompact(query || "");
+      const requiresPhraseMatch = isExactPhraseQuery(query);
+      const tokenTerms = Array.from(
+        new Set(
+          terms
+            .flatMap((term) => term.split(/\s+/))
+            .map((token) => token.trim())
+            .filter((token) => token.length >= 2),
+        ),
+      );
+      if (!terms.length) return list;
+
+      for (const doc of sourceDocs) {
+        ensureDocSearchCache(doc);
+        doc.pages.forEach((text, idx) => {
+          const normalizedText = doc.normalizedPages?.[idx] || "";
+          const compactText = doc.compactPages?.[idx] || "";
+          if (!normalizedText) return;
+          let pageScore = 0;
+          let matchedTerm = "";
+          let snippetAt = -1;
+          let snippetLen = 0;
+
+          if (requiresPhraseMatch && normalizedQuery) {
+            const hasPhrase = normalizedText.includes(normalizedQuery)
+              || (compactQuery && compactText.includes(compactQuery));
+            if (!hasPhrase) return;
+          }
+
+          if (normalizedQuery && normalizedText.includes(normalizedQuery)) {
+            pageScore += 12;
+            snippetAt = normalizedText.indexOf(normalizedQuery);
+            snippetLen = normalizedQuery.length;
+            matchedTerm = query;
+          } else if (compactQuery && compactQuery.length >= 2 && compactText.includes(compactQuery)) {
+            pageScore += 9;
+            matchedTerm = query;
+          }
+
+          for (const term of terms) {
+            if (!term || term.length < 2) continue;
+            const at = normalizedText.indexOf(term);
+            if (at !== -1) {
+              pageScore += 3 + Math.min(term.length / 6, 3);
+              if (snippetAt === -1) {
+                snippetAt = at;
+                snippetLen = term.length;
+                matchedTerm = term;
+              }
+              continue;
+            }
+
+            const compactTerm = normalizeCompact(term);
+            if (compactTerm.length >= 2 && compactText.includes(compactTerm)) {
+              pageScore += 2.5;
+              if (!matchedTerm) matchedTerm = term;
+            }
+          }
+
+          if (!requiresPhraseMatch) {
+            for (const token of tokenTerms) {
+              if (normalizedText.includes(token)) pageScore += 0.6;
+              else if (normalizeCompact(token).length >= 2 && compactText.includes(normalizeCompact(token))) {
+                pageScore += 0.35;
+              }
+            }
+          }
+
+          if (pageScore <= 0) return;
+
+          if (snippetAt < 0) {
+            const fallbackToken = tokenTerms.find((token) => normalizedText.includes(token));
+            if (fallbackToken) {
+              snippetAt = normalizedText.indexOf(fallbackToken);
+              snippetLen = fallbackToken.length;
+              matchedTerm = matchedTerm || fallbackToken;
+            } else {
+              snippetAt = 0;
+              snippetLen = Math.min(Math.max(query.length, 8), 40);
+            }
+          }
+
+          list.push({
+            doc,
+            docName: doc.name,
+            page: idx + 1,
+            snippet: buildSnippet(text, snippetAt, snippetLen),
+            matchedTerm: query || matchedTerm,
+            score: pageScore,
+          });
+        });
+
+        if (list.length >= maxResults) break;
+      }
+
+      return list
+        .sort((a, b) => (b.score || 0) - (a.score || 0))
+        .slice(0, 160);
+    }
+
+    function isExactPhraseQuery(query) {
+      return /\s+/.test(String(query || "").trim());
+    }
+
+    function matchContainsExactPhrase(match, query) {
+      const normalizedQuery = normalizeForSearch(query || "");
+      const compactQuery = normalizeCompact(query || "");
+      if (!normalizedQuery) return true;
+
+      const snippet = String(match?.snippet || "");
+      if (normalizeForSearch(snippet).includes(normalizedQuery)) return true;
+      if (compactQuery && normalizeCompact(snippet).includes(compactQuery)) return true;
+
+      const doc = match?.doc || resolveDocFromMatch(match);
+      if (!doc) return false;
+
+      ensureDocSearchCache(doc);
+      const page = Number(match?.page || 0);
+      const pageIndex = page - 1;
+      if (pageIndex >= 0 && pageIndex < doc.pages.length) {
+        const normalizedPage = doc.normalizedPages?.[pageIndex] || "";
+        const compactPage = doc.compactPages?.[pageIndex] || "";
+        return normalizedPage.includes(normalizedQuery)
+          || (compactQuery && compactPage.includes(compactQuery));
+      }
+      return false;
+    }
+
+    async function loadDefaultDocuments() {
+      for (const entry of DEFAULT_DOCS) {
+        if (docs.some((doc) => doc.name === entry.name && doc.category === entry.category)) continue;
+
+        try {
+          resultHint.textContent = `Loading default document: ${entry.name}${entry.useOCR ? " (OCR enabled)" : ""}`;
+          const pdf = await pdfjsLib.getDocument(encodeURI(entry.url)).promise;
+          const pages = [];
+
+          // Load quickly first so the document appears in the list immediately.
+          for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
+            const page = await pdf.getPage(pageNum);
+            const content = await page.getTextContent();
+            const text = content.items.map((item) => item.str).join(" ").replace(/\s+/g, " ").trim();
+            pages.push(text);
+          }
+
+          const doc = {
+            id: `default-${entry.name}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            name: entry.name,
+            category: entry.category,
+            pdf,
+            pages,
+            normalizedPages: pages.map((pageText) => normalizeForSearch(pageText)),
+            compactPages: pages.map((pageText) => normalizeCompact(pageText)),
+          };
+          docs.push(doc);
+          refreshDocSummary();
+
+          if (entry.useOCR) {
+            resultHint.textContent = `Enhancing default document with OCR: ${entry.name}`;
+            enhanceDocWithOCR(doc).catch((err) => console.error(err));
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      }
+    }
+
+    async function enhanceDocWithOCR(doc) {
+      if (!doc?.pdf || !Array.isArray(doc.pages) || !doc.pages.length) return;
+      const pdf = doc.pdf;
+
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
+        const pageIndex = pageNum - 1;
+        const baseText = doc.pages[pageIndex] || "";
+        if (!shouldUseOCR(baseText)) continue;
+
+        try {
+          const page = await pdf.getPage(pageNum);
+          const ocrText = await extractPageTextWithOCR(page);
+          const merged = mergePageTexts(baseText, ocrText);
+          if (merged !== baseText) {
+            doc.pages[pageIndex] = merged;
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      }
+
+      doc.normalizedPages = doc.pages.map((pageText) => normalizeForSearch(pageText));
+      doc.compactPages = doc.pages.map((pageText) => normalizeCompact(pageText));
+
+      if (viewerState.activeCategory === doc.category) {
+        refreshDocSummary();
+      }
+      resultHint.textContent = `Default document OCR enhancement completed: ${doc.name}`;
+    }
+
+    function shouldUseOCR(text) {
+      if (!ocrEnabled) return false;
+      const clean = (text || "").trim();
+      if (!clean) return true;
+      if (clean.length < 24) return true;
+      const alphaNumCount = (clean.match(/[A-Za-z0-9]/g) || []).length;
+      return alphaNumCount < 8;
+    }
+
+    function mergePageTexts(baseText, ocrText) {
+      const a = (baseText || "").trim();
+      const b = (ocrText || "").replace(/\s+/g, " ").trim();
+      if (!b) return a;
+      if (!a) return b;
+      const compactA = normalizeCompact(a);
+      const compactB = normalizeCompact(b);
+      if (compactA && compactA === compactB) return a;
+      if (compactA && compactB && compactA.includes(compactB)) return a;
+      if (compactA && compactB && compactB.includes(compactA)) return b;
+      return `${a} ${b}`.trim();
+    }
+
+    async function getOcrWorker() {
+      if (!ocrEnabled) return null;
+      if (!ocrWorkerPromise) {
+        ocrWorkerPromise = (async () => {
+          const worker = await globalThis.Tesseract.createWorker("eng");
+          return worker;
+        })();
+      }
+      try {
+        return await ocrWorkerPromise;
+      } catch (err) {
+        console.error(err);
+        ocrEnabled = false;
+        ocrWorkerPromise = null;
+        return null;
+      }
+    }
+
+    async function extractPageTextWithOCR(page) {
+      const worker = await getOcrWorker();
+      if (!worker || !page) return "";
+
+      try {
+        const viewport = page.getViewport({ scale: 1.5 });
+        const ocrCanvas = document.createElement("canvas");
+        const ctx = ocrCanvas.getContext("2d");
+        if (!ctx) return "";
+        ocrCanvas.width = Math.ceil(viewport.width);
+        ocrCanvas.height = Math.ceil(viewport.height);
+        await page.render({ canvasContext: ctx, viewport }).promise;
+        const result = await worker.recognize(ocrCanvas);
+        const text = result?.data?.text || "";
+        ocrCanvas.width = 0;
+        ocrCanvas.height = 0;
+        return text;
+      } catch (err) {
+        console.error(err);
+        return "";
+      }
+    }
+
+    function ensureDocSearchCache(doc) {
+      if (!doc) return;
+      if (!Array.isArray(doc.pages)) {
+        doc.normalizedPages = [];
+        doc.compactPages = [];
+        return;
+      }
+
+      if (!Array.isArray(doc.normalizedPages) || doc.normalizedPages.length !== doc.pages.length) {
+        doc.normalizedPages = doc.pages.map((pageText) => normalizeForSearch(pageText));
+      }
+      if (!Array.isArray(doc.compactPages) || doc.compactPages.length !== doc.pages.length) {
+        doc.compactPages = doc.pages.map((pageText) => normalizeCompact(pageText));
+      }
+    }
+
+    async function uploadFileToOpenAI(file, category, onProgress) {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("category", category);
+
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/api/upload");
+
+        if (typeof onProgress === "function") {
+          xhr.upload.onprogress = (event) => {
+            if (!event.lengthComputable) return;
+            onProgress(event.total > 0 ? event.loaded / event.total : 0);
+          };
+        }
+
+        xhr.onerror = () => {
+          reject(new Error("Upload failed due to network error."));
+        };
+
+        xhr.onload = () => {
+          const raw = xhr.responseText || "";
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              resolve(JSON.parse(raw || "{}"));
+            } catch {
+              resolve({});
+            }
+            return;
+          }
+          reject(new Error(formatApiError(raw) || "upload failed"));
+        };
+
+        xhr.send(form);
+      });
+    }
+
+    function setUploadProgressVisible(visible) {
+      uploadProgressWrap.classList.toggle("hidden", !visible);
+      uploadProgressWrap.setAttribute("aria-hidden", visible ? "false" : "true");
+      if (!visible) setUploadProgress(0);
+    }
+
+    function setUploadProgress(percent) {
+      const safe = Math.max(0, Math.min(100, Number(percent) || 0));
+      uploadProgressBar.style.width = `${safe}%`;
+    }
+
+    function setUploadRunningStatus(completedCount, totalCount) {
+      statusEl.classList.remove("error");
+      const percent = Math.round(Math.max(0, Math.min(100, Number(uploadProgressBar.style.width.replace("%", "")) || 0)));
+      statusEl.textContent = `Uploading... (${completedCount}/${totalCount}) ${percent}%`;
+    }
+
+    function formatApiError(raw) {
+      if (!raw) return "";
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") {
+          if (parsed.error && parsed.detail) return `${parsed.error}: ${parsed.detail}`;
+          if (parsed.error) return String(parsed.error);
+        }
+      } catch {
+        return raw;
+      }
+      return raw;
+    }
+
+    async function searchViaOpenAI(query, category) {
+      const res = await fetch("/api/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, category, max_results: 50 }),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(formatApiError(errText) || "search failed");
+      }
+
+      const data = await res.json();
+      const rows = Array.isArray(data.results) ? data.results : [];
+
+      return rows.map((row) => ({
+        doc: docs.find((doc) => doc.openaiFileId && doc.openaiFileId === row.file_id),
+        docName: row.filename || "Unknown file",
+        page: 1,
+        snippet: row.text || "",
+        matchedTerm: query,
+        fileId: row.file_id,
+        score: typeof row.score === "number" ? row.score : 0,
+      }));
+    }
+
+    function mergeSearchResults(openaiMatches, localMatches, limit) {
+      const byKey = new Map();
+
+      const put = (match, priority) => {
+        const key = buildMatchKey(match);
+        const existing = byKey.get(key);
+        const next = { ...match, _priority: priority };
+        if (!existing) {
+          byKey.set(key, next);
+          return;
+        }
+        if (priority < existing._priority) {
+          byKey.set(key, next);
+          return;
+        }
+        if ((match.score || 0) > (existing.score || 0)) {
+          byKey.set(key, next);
+        }
+      };
+
+      openaiMatches.forEach((match) => put(match, 0));
+      localMatches.forEach((match) => put(match, 1));
+
+      return Array.from(byKey.values())
+        .sort((a, b) => (a._priority - b._priority) || ((b.score || 0) - (a.score || 0)))
+        .slice(0, limit)
+        .map(({ _priority, ...rest }) => rest);
+    }
+
+    function buildMatchKey(match) {
+      const fileKey = match.fileId || match.doc?.openaiFileId || "";
+      const nameKey = normalizeForSearch(match.docName || "");
+      const pageKey = String(match.page || 0);
+      const snippetKey = normalizeForSearch((match.snippet || "").slice(0, 140));
+      return `${fileKey}|${nameKey}|${pageKey}|${snippetKey}`;
+    }
+
+    function resolveDocFromMatch(match) {
+      if (!match) return null;
+      if (match.fileId) {
+        const byFileId = docs.find((doc) => doc.openaiFileId === match.fileId);
+        if (byFileId) return byFileId;
+      }
+      return docs.find(
+        (doc) => doc.category === viewerState.activeCategory && doc.name === match.docName,
+      ) || null;
+    }
+
+    function findBestPageFromSnippet(doc, snippet) {
+      if (!doc || !snippet) return null;
+      const needle = normalizeForSearch(snippet).slice(0, 140);
+      if (!needle) return null;
+      for (let i = 0; i < doc.pages.length; i += 1) {
+        if (normalizeForSearch(doc.pages[i]).includes(needle)) {
+          return i + 1;
+        }
+      }
+      return null;
+    }
+
+    function getDocsByActiveCategory() {
+      return docs.filter((doc) => doc.category === viewerState.activeCategory);
+    }
+
+    function syncViewerWithActiveCategory() {
+      if (!viewerState.doc || viewerState.doc.category !== viewerState.activeCategory) {
+        const docsInCategory = getDocsByActiveCategory();
+        if (docsInCategory.length) {
+          setViewerDoc(docsInCategory[0], 1);
+        } else {
+          viewerState.doc = null;
+          viewerState.page = 1;
+          renderViewer();
+        }
+      }
+    }
+
+    function groupMatchesByDoc(matches) {
+      const byId = new Map();
+      matches.forEach((match) => {
+        const resolved = match.doc || resolveDocFromMatch(match);
+        const key = resolved
+          ? `doc:${resolved.id}`
+          : `name:${normalizeForSearch(match.docName || "unknown-file")}`;
+        if (!byId.has(key)) {
+          byId.set(key, {
+            docName: match.docName || resolved?.name || "Unknown file",
+            matches: [],
+          });
+        }
+        byId.get(key).matches.push(resolved ? { ...match, doc: resolved } : match);
+      });
+      return Array.from(byId.values());
+    }
+
+    function openMatch(match) {
+      if (match.doc) {
+        setViewerDoc(match.doc, match.page || 1);
+        return;
+      }
+
+      const resolvedDoc = resolveDocFromMatch(match);
+      if (resolvedDoc) {
+        const resolvedPage = findBestPageFromSnippet(resolvedDoc, match.snippet || "") || 1;
+        setViewerDoc(resolvedDoc, resolvedPage);
+      }
+    }
+
+    function setViewerDoc(doc, page) {
+      viewerState.doc = doc;
+      viewerState.page = page;
+      renderViewer();
+    }
+
+    async function renderViewer() {
+      if (!viewerState.doc) {
+        viewerMeta.textContent = "Click a result to view the page.";
+        pageIndicator.textContent = "- / -";
+        pageText.textContent = "Selected page text will appear here.";
+        setPagingButtonState();
+        return;
+      }
+
+      const total = viewerState.doc.pages.length;
+      if (!viewerState.doc.pdf || total <= 0) {
+        viewerMeta.textContent = `${viewerState.doc.name} / Preview unavailable`;
+        pageIndicator.textContent = "- / -";
+        pageText.textContent = "This document was uploaded, but browser preview text could not be generated.";
+        const ctx = canvas.getContext("2d");
+        if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+        canvas.width = 0;
+        canvas.height = 0;
+        setPagingButtonState();
+        return;
+      }
+
+      viewerState.page = Math.max(1, Math.min(viewerState.page, total));
+      const currentText = viewerState.doc.pages[viewerState.page - 1] || "";
+
+      viewerMeta.textContent = `${viewerState.doc.name} / Page ${viewerState.page}`;
+      pageIndicator.textContent = `${viewerState.page} / ${total}`;
+
+      const safeText = escapeHtml(currentText);
+      pageText.innerHTML = viewerState.searchTerms.length
+        ? highlightSnippet(safeText, viewerState.searchTerms)
+        : safeText;
+
+      await renderPage(viewerState.doc.pdf, viewerState.page);
+      setPagingButtonState();
+    }
+
+    function setPagingButtonState() {
+      if (!viewerState.doc) {
+        prevPageBtn.disabled = true;
+        nextPageBtn.disabled = true;
+        return;
+      }
+      if (!viewerState.doc.pdf || viewerState.doc.pages.length <= 1) {
+        prevPageBtn.disabled = true;
+        nextPageBtn.disabled = true;
+        return;
+      }
+      prevPageBtn.disabled = viewerState.page <= 1;
+      nextPageBtn.disabled = viewerState.page >= viewerState.doc.pages.length;
+    }
+
+    function buildSnippet(text, start, qLen) {
+      const left = Math.max(0, start - 60);
+      const right = Math.min(text.length, start + qLen + 60);
+      const prefix = left > 0 ? "..." : "";
+      const suffix = right < text.length ? "..." : "";
+      return `${prefix}${text.slice(left, right)}${suffix}`;
+    }
+
+    async function renderPage(pdf, pageNum) {
+      if (activeRenderTask) {
+        try {
+          activeRenderTask.cancel();
+        } catch (err) {
+          console.warn(err);
+        }
+        activeRenderTask = null;
+      }
+
+      const page = await pdf.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 1.6 });
+      const ctx = canvas.getContext("2d");
+
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+
+      const task = page.render({ canvasContext: ctx, viewport });
+      activeRenderTask = task;
+
+      try {
+        await task.promise;
+      } catch (err) {
+        if (err?.name !== "RenderingCancelledException") throw err;
+      } finally {
+        if (activeRenderTask === task) activeRenderTask = null;
+      }
+    }
+
+    function highlightSnippet(text, terms) {
+      if (!terms.length) return text;
+      const escapedTerms = terms
+        .map((term) => term.trim())
+        .filter(Boolean)
+        .sort((a, b) => b.length - a.length)
+        .map((term) => escapeRegExp(term));
+      if (!escapedTerms.length) return text;
+      const re = new RegExp(`(${escapedTerms.join("|")})`, "gi");
+      return text.replace(re, "<mark>$1</mark>");
+    }
+
+    function buildSearchTerms(query) {
+      const raw = query.trim();
+      if (!raw) return [];
+
+      const baseTokens = raw
+        .split(/\s+/)
+        .map((token) => token.trim())
+        .filter(Boolean);
+
+      const terms = new Set([raw, ...baseTokens]);
+
+      // Token-based translation expansion to avoid noisy full-sentence replacements.
+      const tokenTranslations = baseTokens.map((token) => {
+        const normalizedToken = normalizeForSearch(token);
+        let translated = token;
+        translationPairs.forEach(([from, to]) => {
+          if (normalizeForSearch(from) === normalizedToken) {
+            translated = to;
+          }
+        });
+        return translated;
+      });
+
+      tokenTranslations.forEach((token) => terms.add(token));
+      if (tokenTranslations.length > 1) {
+        terms.add(tokenTranslations.join(" "));
+        for (let i = 0; i < tokenTranslations.length - 1; i += 1) {
+          terms.add(`${tokenTranslations[i]} ${tokenTranslations[i + 1]}`);
+        }
+      }
+
+      return Array.from(terms)
+        .map((term) => term.trim())
+        .filter(Boolean)
+        .slice(0, 24);
+    }
+
+    function normalizeForSearch(value) {
+      return value.normalize("NFKC").toLocaleLowerCase();
+    }
+
+    function normalizeCompact(value) {
+      return normalizeForSearch(value)
+        .replace(/\s+/g, "")
+        .replace(/[^\p{L}\p{N}]/gu, "");
+    }
+
+    function escapeRegExp(value) {
+      return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    function escapeHtml(value) {
+      return value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    addEventListener("beforeunload", async () => {
+      if (!ocrWorkerPromise) return;
+      try {
+        const worker = await ocrWorkerPromise;
+        await worker.terminate();
+      } catch (err) {
+        console.error(err);
+      } finally {
+        ocrWorkerPromise = null;
+      }
+    });
+
+    async function initApp() {
+      renderSelectedFiles();
+      renderPendingUploads();
+      setPagingButtonState();
+      await loadDefaultDocuments();
+      refreshDocSummary();
+      syncViewerWithActiveCategory();
+      resultHint.textContent = "Default document loaded. Enter a search query.";
+    }
+
+    initApp();
+  </script>
+</body>
+</html>
