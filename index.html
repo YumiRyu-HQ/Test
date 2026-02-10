@@ -183,8 +183,9 @@
     /** @type {Record<"Basic"|"Web"|"Mobile", boolean>} */
     const pendingOpenState = { Basic: false, Web: false, Mobile: false };
 
-    /** @type {{ id: string, name: string, category: "Basic"|"Web"|"Mobile", pdf: any | null, pages: string[], normalizedPages?: string[], compactPages?: string[], openaiFileId?: string }[]} */
+    /** @type {{ id: string, name: string, category: "Basic"|"Web"|"Mobile", pdf: any | null, pages: string[], normalizedPages?: string[], compactPages?: string[], openaiFileId?: string, downloadUrl?: string }[]} */
     const docs = [];
+    const resultGroupOpenState = Object.create(null);
 
     const viewerState = {
       doc: null,
@@ -315,6 +316,7 @@
               normalizedPages: pages.map((pageText) => normalizeForSearch(pageText)),
               compactPages: pages.map((pageText) => normalizeCompact(pageText)),
               openaiFileId: uploadResult.file_id,
+              downloadUrl: URL.createObjectURL(file),
             });
             successCount += 1;
           } catch (err) {
@@ -636,7 +638,9 @@
 
       let matches = mergeSearchResults(openaiMatches, localMatches, 180);
       if (isExactPhraseQuery(query)) {
-        matches = matches.filter((match) => matchContainsExactPhrase(match, query));
+        matches = matches
+          .map((match) => enforceExactPhraseResult(match, query))
+          .filter(Boolean);
       }
       if (!matches.length) {
         resultHint.textContent = `No results for "${query}" in ${viewerState.activeCategory} category.`;
@@ -644,6 +648,7 @@
       }
 
       const grouped = groupMatchesByDoc(matches);
+      const highlightTerms = getHighlightTerms(viewerState.query, viewerState.searchTerms);
       resultHint.textContent = openaiFailed
         ? `${matches.length} results from ${grouped.length} document(s) in ${viewerState.activeCategory} category. (Local search only)`
         : `${matches.length} results from ${grouped.length} document(s) in ${viewerState.activeCategory} category. (OpenAI ${openaiMatches.length} + Local ${localMatches.length})`;
@@ -651,14 +656,54 @@
       grouped.forEach((group) => {
         const section = document.createElement("section");
         section.className = "result-group";
+        const groupKey = normalizeForSearch(group.docName || "");
+        const isOpen = resultGroupOpenState[groupKey] !== false;
 
         const head = document.createElement("div");
         head.className = "result-group-head";
-        head.innerHTML = `
-          <div class="result-group-title">${escapeHtml(group.docName)}</div>
-          <div class="result-group-count">${group.matches.length} hits</div>
-        `;
+        const titleWrap = document.createElement("div");
+        titleWrap.className = "result-group-title-wrap";
+
+        const toggleBtn = document.createElement("button");
+        toggleBtn.type = "button";
+        toggleBtn.className = "result-group-toggle secondary";
+        toggleBtn.textContent = isOpen ? "▾" : "▸";
+        titleWrap.appendChild(toggleBtn);
+
+        const title = document.createElement("div");
+        title.className = "result-group-title";
+        title.textContent = group.docName;
+        titleWrap.appendChild(title);
+        head.appendChild(titleWrap);
+
+        const right = document.createElement("div");
+        right.className = "result-group-right";
+        const count = document.createElement("div");
+        count.className = "result-group-count";
+        count.textContent = `${group.matches.length} hits`;
+        right.appendChild(count);
+
+        if (group.downloadUrl) {
+          const download = document.createElement("a");
+          download.className = "result-group-download";
+          download.href = group.downloadUrl;
+          download.download = group.docName || "document.pdf";
+          download.title = "Download document";
+          download.setAttribute("aria-label", `Download ${group.docName}`);
+          download.textContent = "⤓";
+          right.appendChild(download);
+        }
+        head.appendChild(right);
         section.appendChild(head);
+
+        const body = document.createElement("div");
+        body.className = "result-group-body";
+        if (!isOpen) body.classList.add("is-collapsed");
+        toggleBtn.addEventListener("click", () => {
+          const nextOpen = body.classList.toggle("is-collapsed") === false;
+          resultGroupOpenState[groupKey] = nextOpen;
+          toggleBtn.textContent = nextOpen ? "▾" : "▸";
+        });
 
         group.matches.forEach((match) => {
           const card = document.createElement("button");
@@ -666,11 +711,12 @@
           card.type = "button";
           card.innerHTML = `
             <div class="meta">Page ${match.page} · Matched query: ${escapeHtml(viewerState.query || match.matchedTerm)}</div>
-            <div class="snippet">${highlightSnippet(match.snippet, viewerState.searchTerms)}</div>
+            <div class="snippet">${highlightSnippet(match.snippet, highlightTerms)}</div>
           `;
           card.addEventListener("click", () => openMatch(match));
-          section.appendChild(card);
+          body.appendChild(card);
         });
+        section.appendChild(body);
 
         resultsEl.appendChild(section);
       });
@@ -687,7 +733,6 @@
       const list = [];
       const maxResults = 220;
       const normalizedQuery = normalizeForSearch(query || "");
-      const compactQuery = normalizeCompact(query || "");
       const requiresPhraseMatch = isExactPhraseQuery(query);
       const tokenTerms = Array.from(
         new Set(
@@ -703,7 +748,6 @@
         ensureDocSearchCache(doc);
         doc.pages.forEach((text, idx) => {
           const normalizedText = doc.normalizedPages?.[idx] || "";
-          const compactText = doc.compactPages?.[idx] || "";
           if (!normalizedText) return;
           let pageScore = 0;
           let matchedTerm = "";
@@ -711,8 +755,7 @@
           let snippetLen = 0;
 
           if (requiresPhraseMatch && normalizedQuery) {
-            const hasPhrase = normalizedText.includes(normalizedQuery)
-              || (compactQuery && compactText.includes(compactQuery));
+            const hasPhrase = normalizedText.includes(normalizedQuery);
             if (!hasPhrase) return;
           }
 
@@ -720,9 +763,6 @@
             pageScore += 12;
             snippetAt = normalizedText.indexOf(normalizedQuery);
             snippetLen = normalizedQuery.length;
-            matchedTerm = query;
-          } else if (compactQuery && compactQuery.length >= 2 && compactText.includes(compactQuery)) {
-            pageScore += 9;
             matchedTerm = query;
           }
 
@@ -740,7 +780,7 @@
             }
 
             const compactTerm = normalizeCompact(term);
-            if (compactTerm.length >= 2 && compactText.includes(compactTerm)) {
+            if (!requiresPhraseMatch && compactTerm.length >= 2 && (doc.compactPages?.[idx] || "").includes(compactTerm)) {
               pageScore += 2.5;
               if (!matchedTerm) matchedTerm = term;
             }
@@ -749,7 +789,7 @@
           if (!requiresPhraseMatch) {
             for (const token of tokenTerms) {
               if (normalizedText.includes(token)) pageScore += 0.6;
-              else if (normalizeCompact(token).length >= 2 && compactText.includes(normalizeCompact(token))) {
+              else if (normalizeCompact(token).length >= 2 && (doc.compactPages?.[idx] || "").includes(normalizeCompact(token))) {
                 pageScore += 0.35;
               }
             }
@@ -793,12 +833,10 @@
 
     function matchContainsExactPhrase(match, query) {
       const normalizedQuery = normalizeForSearch(query || "");
-      const compactQuery = normalizeCompact(query || "");
       if (!normalizedQuery) return true;
 
       const snippet = String(match?.snippet || "");
       if (normalizeForSearch(snippet).includes(normalizedQuery)) return true;
-      if (compactQuery && normalizeCompact(snippet).includes(compactQuery)) return true;
 
       const doc = match?.doc || resolveDocFromMatch(match);
       if (!doc) return false;
@@ -808,11 +846,43 @@
       const pageIndex = page - 1;
       if (pageIndex >= 0 && pageIndex < doc.pages.length) {
         const normalizedPage = doc.normalizedPages?.[pageIndex] || "";
-        const compactPage = doc.compactPages?.[pageIndex] || "";
-        return normalizedPage.includes(normalizedQuery)
-          || (compactQuery && compactPage.includes(compactQuery));
+        return normalizedPage.includes(normalizedQuery);
       }
       return false;
+    }
+
+    function enforceExactPhraseResult(match, query) {
+      if (!matchContainsExactPhrase(match, query)) return null;
+
+      const normalizedQuery = normalizeForSearch(query || "");
+      const snippet = String(match?.snippet || "");
+
+      // If snippet already includes the full phrase, keep as-is and normalize matched term.
+      if (normalizeForSearch(snippet).includes(normalizedQuery)) {
+        return { ...match, matchedTerm: query };
+      }
+
+      const doc = match?.doc || resolveDocFromMatch(match);
+      if (!doc) return null;
+      ensureDocSearchCache(doc);
+
+      const givenPage = Number(match?.page || 0);
+      if (!(givenPage >= 1 && givenPage <= doc.pages.length)) return null;
+
+      const pageIndex = givenPage - 1;
+      const normalizedPage = doc.normalizedPages?.[pageIndex] || "";
+      const at = normalizedPage.indexOf(normalizedQuery);
+      if (at !== -1) {
+        return {
+          ...match,
+          doc,
+          page: pageIndex + 1,
+          snippet: buildSnippet(doc.pages[pageIndex] || "", at, Math.max(query.length, 1)),
+          matchedTerm: query,
+        };
+      }
+
+      return null;
     }
 
     async function loadDefaultDocuments() {
@@ -840,6 +910,7 @@
             pages,
             normalizedPages: pages.map((pageText) => normalizeForSearch(pageText)),
             compactPages: pages.map((pageText) => normalizeCompact(pageText)),
+            downloadUrl: encodeURI(entry.url),
           };
           docs.push(doc);
           refreshDocSummary();
@@ -1049,7 +1120,12 @@
       return rows.map((row) => ({
         doc: docs.find((doc) => doc.openaiFileId && doc.openaiFileId === row.file_id),
         docName: row.filename || "Unknown file",
-        page: 1,
+        page: (() => {
+          const doc = docs.find((d) => d.openaiFileId && d.openaiFileId === row.file_id);
+          if (!doc) return 1;
+          const bySnippet = findBestPageFromSnippet(doc, row.text || "");
+          return bySnippet || 1;
+        })(),
         snippet: row.text || "",
         matchedTerm: query,
         fileId: row.file_id,
@@ -1144,10 +1220,15 @@
         if (!byId.has(key)) {
           byId.set(key, {
             docName: match.docName || resolved?.name || "Unknown file",
+            downloadUrl: resolved?.downloadUrl || "",
             matches: [],
           });
         }
-        byId.get(key).matches.push(resolved ? { ...match, doc: resolved } : match);
+        const group = byId.get(key);
+        if (!group.downloadUrl && resolved?.downloadUrl) {
+          group.downloadUrl = resolved.downloadUrl;
+        }
+        group.matches.push(resolved ? { ...match, doc: resolved } : match);
       });
       return Array.from(byId.values());
     }
@@ -1200,8 +1281,9 @@
       pageIndicator.textContent = `${viewerState.page} / ${total}`;
 
       const safeText = escapeHtml(currentText);
-      pageText.innerHTML = viewerState.searchTerms.length
-        ? highlightSnippet(safeText, viewerState.searchTerms)
+      const highlightTerms = getHighlightTerms(viewerState.query, viewerState.searchTerms);
+      pageText.innerHTML = highlightTerms.length
+        ? highlightSnippet(safeText, highlightTerms)
         : safeText;
 
       await renderPage(viewerState.doc.pdf, viewerState.page);
@@ -1313,6 +1395,12 @@
       return value.normalize("NFKC").toLocaleLowerCase();
     }
 
+    function getHighlightTerms(query, searchTerms) {
+      const raw = String(query || "").trim();
+      if (isExactPhraseQuery(raw)) return raw ? [raw] : [];
+      return Array.isArray(searchTerms) ? searchTerms : [];
+    }
+
     function normalizeCompact(value) {
       return normalizeForSearch(value)
         .replace(/\s+/g, "")
@@ -1333,6 +1421,15 @@
     }
 
     addEventListener("beforeunload", async () => {
+      docs.forEach((doc) => {
+        if (doc?.downloadUrl && doc.downloadUrl.startsWith("blob:")) {
+          try {
+            URL.revokeObjectURL(doc.downloadUrl);
+          } catch (err) {
+            console.error(err);
+          }
+        }
+      });
       if (!ocrWorkerPromise) return;
       try {
         const worker = await ocrWorkerPromise;
